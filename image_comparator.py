@@ -3,7 +3,7 @@ import sys
 from enum import Enum
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtCore import QEvent, QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QImage, QMouseEvent, QPainter, QPen, QWheelEvent
 from PySide6.QtWidgets import (
     QApplication,
@@ -30,32 +30,44 @@ class ImageCompareCanvas(QWidget):
         super().__init__()
         self.image_a: QImage | None = None
         self.image_b: QImage | None = None
-        self.mode = CompareMode.SIDE_BY_SIDE
-
-        self.slider_ratio = 0.5
-        self._dragging_slider = False
-
-        self._slider_zoom = 1.0
-        self._slider_pan = QPointF(0.0, 0.0)
         self._zoom_min = 1.0
         self._zoom_max = 8.0
         self._zoom_step = 1.1
-
-        self._side_center_norm = QPointF(0.5, 0.5)
-
-        self._hold_zoom_active = False
-        self._hold_norm_pos: tuple[float, float] | None = None
         self._lens_size = 160
         self._lens_zoom_factor = 4.0
 
+        self._reset_view_state()
         self.setMouseTracking(True)
 
-    def set_images(self, image_a: QImage | None, image_b: QImage | None) -> None:
-        self.image_a = image_a
-        self.image_b = image_b
+    def _reset_view_state(self) -> None:
+        self.mode = CompareMode.SIDE_BY_SIDE
+        self.slider_ratio = 0.5
+        self._dragging_slider = False
         self._slider_zoom = 1.0
         self._slider_pan = QPointF(0.0, 0.0)
+        self._side_zoom = 1.0
         self._side_center_norm = QPointF(0.5, 0.5)
+        self._hold_zoom_active = False
+        self._hold_norm_pos = None
+
+    def _clear_interaction_state(self) -> None:
+        self._dragging_slider = False
+        self._hold_zoom_active = False
+        self._hold_norm_pos = None
+
+    def set_images(
+        self,
+        image_a: QImage | None,
+        image_b: QImage | None,
+        *,
+        reset_view: bool = True,
+    ) -> None:
+        self.image_a = image_a
+        self.image_b = image_b
+        if reset_view:
+            self._reset_view_state()
+        else:
+            self._clear_interaction_state()
         self.update()
 
     def set_mode(self, mode: CompareMode) -> None:
@@ -87,23 +99,41 @@ class ImageCompareCanvas(QWidget):
         right = QRectF(area.x() + pane_w + gap, area.y(), pane_w, area.height())
         return left, right
 
-    def _pane_render_state(self, image: QImage, pane: QRectF) -> tuple[QRectF, QRectF]:
+    def _side_base_scale(self, image: QImage, pane: QRectF) -> float:
+        if image.isNull() or pane.width() <= 0 or pane.height() <= 0:
+            return 1.0
+        return min(pane.width() / image.width(), pane.height() / image.height())
+
+    def _pane_render_state(
+        self,
+        image: QImage,
+        pane: QRectF,
+        *,
+        zoom: float | None = None,
+        center_norm: QPointF | None = None,
+    ) -> tuple[QRectF, QRectF]:
         if image.isNull() or pane.width() <= 0 or pane.height() <= 0:
             return QRectF(), QRectF()
 
-        vis_w = min(float(image.width()), pane.width())
-        vis_h = min(float(image.height()), pane.height())
+        scale = self._side_base_scale(image, pane)
+        active_zoom = self._side_zoom if zoom is None else zoom
+        center = self._side_center_norm if center_norm is None else center_norm
 
-        center_x = self._side_center_norm.x() * max(0.0, image.width() - 1.0)
-        center_y = self._side_center_norm.y() * max(0.0, image.height() - 1.0)
+        vis_w = min(float(image.width()), pane.width() / (scale * active_zoom))
+        vis_h = min(float(image.height()), pane.height() / (scale * active_zoom))
+
+        center_x = center.x() * max(0.0, image.width() - 1.0)
+        center_y = center.y() * max(0.0, image.height() - 1.0)
 
         src_x = max(0.0, min(center_x - (vis_w / 2.0), image.width() - vis_w))
         src_y = max(0.0, min(center_y - (vis_h / 2.0), image.height() - vis_h))
         src_rect = QRectF(src_x, src_y, vis_w, vis_h)
 
-        dst_x = pane.x() + (pane.width() - vis_w) / 2.0
-        dst_y = pane.y() + (pane.height() - vis_h) / 2.0
-        dst_rect = QRectF(dst_x, dst_y, vis_w, vis_h)
+        dst_w = vis_w * scale * active_zoom
+        dst_h = vis_h * scale * active_zoom
+        dst_x = pane.x() + (pane.width() - dst_w) / 2.0
+        dst_y = pane.y() + (pane.height() - dst_h) / 2.0
+        dst_rect = QRectF(dst_x, dst_y, dst_w, dst_h)
         return src_rect, dst_rect
 
     def _normalized_from_side_position(
@@ -134,6 +164,75 @@ class ImageCompareCanvas(QWidget):
         nx = px / max(1.0, image.width() - 1.0)
         ny = py / max(1.0, image.height() - 1.0)
         return (max(0.0, min(1.0, nx)), max(0.0, min(1.0, ny)))
+
+    def _normalized_in_render_state(
+        self,
+        pos: QPointF,
+        image: QImage,
+        src_rect: QRectF,
+        dst_rect: QRectF,
+    ) -> tuple[float, float] | None:
+        if image.isNull() or dst_rect.width() <= 0 or dst_rect.height() <= 0:
+            return None
+
+        px = src_rect.x() + (
+            (pos.x() - dst_rect.x()) * (src_rect.width() / dst_rect.width())
+        )
+        py = src_rect.y() + (
+            (pos.y() - dst_rect.y()) * (src_rect.height() / dst_rect.height())
+        )
+        return (
+            max(0.0, min(1.0, px / max(1.0, image.width() - 1.0))),
+            max(0.0, min(1.0, py / max(1.0, image.height() - 1.0))),
+        )
+
+    def _normalized_from_side_cursor(self, pos: QPointF) -> tuple[float, float] | None:
+        if self.image_a is None or self.image_b is None:
+            return None
+
+        left_pane, right_pane = self._side_panes()
+        src_a, dst_a = self._pane_render_state(self.image_a, left_pane)
+        src_b, dst_b = self._pane_render_state(self.image_b, right_pane)
+        return self._normalized_from_side_position(pos, src_a, dst_a, src_b, dst_b)
+
+    def _side_cursor_zoom_center(self, pos: QPointF, new_zoom: float) -> QPointF | None:
+        left_pane, right_pane = self._side_panes()
+        panes = ((self.image_a, left_pane), (self.image_b, right_pane))
+        for image, pane in panes:
+            if image is None:
+                continue
+            current_src, current_dst = self._pane_render_state(image, pane)
+            if not current_dst.contains(pos):
+                continue
+
+            norm = self._normalized_in_render_state(pos, image, current_src, current_dst)
+            if norm is None:
+                return None
+
+            next_src, next_dst = self._pane_render_state(
+                image,
+                pane,
+                zoom=new_zoom,
+                center_norm=self._side_center_norm,
+            )
+            if next_dst.isNull():
+                return None
+
+            rel_x = (pos.x() - next_dst.x()) / next_dst.width()
+            rel_y = (pos.y() - next_dst.y()) / next_dst.height()
+            src_px = norm[0] * max(0.0, image.width() - 1.0)
+            src_py = norm[1] * max(0.0, image.height() - 1.0)
+            center_x = src_px - ((rel_x - 0.5) * next_src.width())
+            center_y = src_py - ((rel_y - 0.5) * next_src.height())
+            max_x = max(0.0, image.width() - next_src.width())
+            max_y = max(0.0, image.height() - next_src.height())
+            clamped_x = max(0.0, min(center_x - (next_src.width() / 2.0), max_x))
+            clamped_y = max(0.0, min(center_y - (next_src.height() / 2.0), max_y))
+            return QPointF(
+                (clamped_x + (next_src.width() / 2.0)) / max(1.0, image.width() - 1.0),
+                (clamped_y + (next_src.height() / 2.0)) / max(1.0, image.height() - 1.0),
+            )
+        return None
 
     def _draw_placeholder(self, painter: QPainter, text: str) -> None:
         painter.setPen(QColor("#d8dee9"))
@@ -442,6 +541,22 @@ class ImageCompareCanvas(QWidget):
         pan_step = 40.0 * steps
 
         if self.mode == CompareMode.SIDE_BY_SIDE:
+            if modifiers & Qt.KeyboardModifier.ControlModifier:
+                if steps > 0:
+                    proposed_zoom = self._side_zoom * (self._zoom_step**steps)
+                else:
+                    proposed_zoom = self._side_zoom / (self._zoom_step ** abs(steps))
+                new_zoom = max(self._zoom_min, min(self._zoom_max, proposed_zoom))
+                if abs(new_zoom - self._side_zoom) < 1e-6:
+                    return
+
+                new_center = self._side_cursor_zoom_center(event.position(), new_zoom)
+                self._side_zoom = new_zoom
+                if new_center is not None:
+                    self._side_center_norm = new_center
+                self.update()
+                return
+
             base_w = float(max(self.image_a.width(), self.image_b.width(), 1))
             base_h = float(max(self.image_a.height(), self.image_b.height(), 1))
 
@@ -518,7 +633,7 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Image Comparator")
-        self.resize(1200, 760)
+        self.resize(1280, 720)
 
         self.config_path = Path(__file__).resolve().parent / "config.ini"
         self.last_folder = self._load_last_folder()
@@ -535,6 +650,15 @@ class MainWindow(QMainWindow):
 
         load_b_btn = QPushButton("Load Image B")
         load_b_btn.clicked.connect(lambda: self._load_image("b"))
+
+        unload_a_btn = QPushButton("Unload Image A")
+        unload_a_btn.clicked.connect(lambda: self._unload_image("a"))
+
+        unload_b_btn = QPushButton("Unload Image B")
+        unload_b_btn.clicked.connect(lambda: self._unload_image("b"))
+
+        clear_workspace_btn = QPushButton("Clear Workspace")
+        clear_workspace_btn.clicked.connect(self._clear_workspace)
 
         mode_side_btn = QPushButton("Side by Side")
         mode_side_btn.clicked.connect(
@@ -553,6 +677,7 @@ class MainWindow(QMainWindow):
         lens_zoom_input.setSingleStep(0.2)
         lens_zoom_input.setValue(4.0)
         lens_zoom_input.valueChanged.connect(self.canvas.set_lens_zoom)
+        self.lens_zoom_input = lens_zoom_input
 
         lens_size_label = QLabel("Lens Size")
         lens_size_input = QSpinBox()
@@ -560,13 +685,18 @@ class MainWindow(QMainWindow):
         lens_size_input.setSingleStep(10)
         lens_size_input.setValue(160)
         lens_size_input.valueChanged.connect(self.canvas.set_lens_size)
+        self.lens_size_input = lens_size_input
 
         controls = QHBoxLayout()
         controls.addWidget(load_a_btn)
+        controls.addWidget(unload_a_btn)
         controls.addWidget(self.label_a, stretch=1)
         controls.addSpacing(8)
         controls.addWidget(load_b_btn)
+        controls.addWidget(unload_b_btn)
         controls.addWidget(self.label_b, stretch=1)
+        controls.addSpacing(12)
+        controls.addWidget(clear_workspace_btn)
         controls.addSpacing(12)
         controls.addWidget(mode_side_btn)
         controls.addWidget(mode_slider_btn)
@@ -583,6 +713,7 @@ class MainWindow(QMainWindow):
         container = QWidget()
         container.setLayout(root)
         self.setCentralWidget(container)
+        QApplication.instance().installEventFilter(self)
 
         self._save_last_folder(self.last_folder)
 
@@ -645,6 +776,45 @@ class MainWindow(QMainWindow):
             self.label_b.setText(f"Image B: {selected_path.name}")
 
         self.canvas.set_images(self.image_a, self.image_b)
+
+    def _unload_image(self, target: str) -> None:
+        if target == "a":
+            self.image_a = None
+            self.label_a.setText("Image A: Not loaded")
+        else:
+            self.image_b = None
+            self.label_b.setText("Image B: Not loaded")
+
+        self.canvas.set_images(self.image_a, self.image_b, reset_view=False)
+
+    def _clear_workspace(self) -> None:
+        self.image_a = None
+        self.image_b = None
+        self.label_a.setText("Image A: Not loaded")
+        self.label_b.setText("Image B: Not loaded")
+        self.canvas.set_images(None, None, reset_view=True)
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802
+        if event.type() != QEvent.Type.MouseButtonPress:
+            return super().eventFilter(watched, event)
+
+        focused = self.focusWidget()
+        if focused in {self.lens_zoom_input, self.lens_size_input}:
+            widget = QApplication.widgetAt(event.globalPosition().toPoint())
+            in_zoom = widget is not None and (
+                widget is self.lens_zoom_input or self.lens_zoom_input.isAncestorOf(widget)
+            )
+            in_size = widget is not None and (
+                widget is self.lens_size_input or self.lens_size_input.isAncestorOf(widget)
+            )
+            if not in_zoom and not in_size:
+                focused.clearFocus()
+                self.centralWidget().setFocus()
+        return super().eventFilter(watched, event)
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        QApplication.instance().removeEventFilter(self)
+        super().closeEvent(event)
 
 
 def main() -> int:
