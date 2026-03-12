@@ -1,4 +1,7 @@
 import os
+import shutil
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -8,7 +11,7 @@ from PySide6.QtCore import QPoint, QPointF, Qt
 from PySide6.QtGui import QColor, QImage, QMouseEvent, QWheelEvent
 from PySide6.QtWidgets import QApplication
 
-from image_comparator import CompareMode, MainWindow
+from image_comparator import CompareMode, MainWindow, load_app_icon, resolve_app_base_path
 
 
 def app() -> QApplication:
@@ -178,6 +181,37 @@ class ImageComparatorWindowTests(unittest.TestCase):
 
         self.assertTrue(icon_path.exists())
         self.assertFalse(self.window.windowIcon().isNull())
+
+    def test_resolve_app_base_path_uses_pyinstaller_bundle_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            original_meipass = getattr(sys, "_MEIPASS", None)
+            sys._MEIPASS = temp_dir
+            try:
+                self.assertEqual(resolve_app_base_path(), Path(temp_dir))
+            finally:
+                if original_meipass is None:
+                    delattr(sys, "_MEIPASS")
+                else:
+                    sys._MEIPASS = original_meipass
+
+    def test_load_app_icon_uses_pyinstaller_bundle_path(self) -> None:
+        source_icon = Path(__file__).resolve().parent.parent / "assets" / "icon.ico"
+        self.assertTrue(source_icon.exists())
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            bundle_assets = Path(temp_dir) / "assets"
+            bundle_assets.mkdir()
+            shutil.copy2(source_icon, bundle_assets / "icon.ico")
+
+            original_meipass = getattr(sys, "_MEIPASS", None)
+            sys._MEIPASS = temp_dir
+            try:
+                self.assertFalse(load_app_icon().isNull())
+            finally:
+                if original_meipass is None:
+                    delattr(sys, "_MEIPASS")
+                else:
+                    sys._MEIPASS = original_meipass
 
 
 if __name__ == "__main__":

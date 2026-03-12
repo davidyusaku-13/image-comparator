@@ -86,7 +86,7 @@ jobs:
 
       - name: Build executable
         run: |
-          pyinstaller --noconfirm --onefile --windowed --name image-comparator image_comparator.py
+          pyinstaller --noconfirm --onefile --windowed --name image-comparator --icon assets/icon.ico --add-data "assets/icon.ico;assets" image_comparator.py
 
       - name: Rename executable for release
         shell: pwsh

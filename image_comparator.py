@@ -831,7 +831,7 @@ def main() -> int:
 
 
 def load_app_icon() -> QIcon:
-    icon_path = Path(__file__).resolve().parent / "assets" / "icon.ico"
+    icon_path = resolve_app_base_path() / "assets" / "icon.ico"
     if not icon_path.is_file():
         return QIcon()
 
@@ -839,6 +839,13 @@ def load_app_icon() -> QIcon:
     if icon.isNull():
         return QIcon()
     return icon
+
+
+def resolve_app_base_path() -> Path:
+    bundle_dir = getattr(sys, "_MEIPASS", None)
+    if bundle_dir is not None:
+        return Path(bundle_dir)
+    return Path(__file__).resolve().parent
 
 
 if __name__ == "__main__":
