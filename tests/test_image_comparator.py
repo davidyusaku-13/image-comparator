@@ -1,5 +1,6 @@
 import os
 import unittest
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -171,6 +172,12 @@ class ImageComparatorWindowTests(unittest.TestCase):
             self.assertEqual(fresh_window.size().height(), 720)
         finally:
             fresh_window.close()
+
+    def test_window_uses_non_null_icon_from_assets(self) -> None:
+        icon_path = Path(__file__).resolve().parent.parent / "assets" / "icon.ico"
+
+        self.assertTrue(icon_path.exists())
+        self.assertFalse(self.window.windowIcon().isNull())
 
 
 if __name__ == "__main__":

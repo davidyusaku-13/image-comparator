@@ -4,7 +4,7 @@ from enum import Enum
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QImage, QMouseEvent, QPainter, QPen, QWheelEvent
+from PySide6.QtGui import QIcon, QColor, QImage, QMouseEvent, QPainter, QPen, QWheelEvent
 from PySide6.QtWidgets import (
     QApplication,
     QDoubleSpinBox,
@@ -636,6 +636,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Image Comparator")
         self.resize(1280, 720)
+        self.setWindowIcon(load_app_icon())
 
         self.config_path = Path(__file__).resolve().parent / "config.ini"
         self.last_folder = self._load_last_folder()
@@ -821,9 +822,23 @@ class MainWindow(QMainWindow):
 
 def main() -> int:
     app = QApplication(sys.argv)
+    app_icon = load_app_icon()
+    if not app_icon.isNull():
+        app.setWindowIcon(app_icon)
     window = MainWindow()
     window.show()
     return app.exec()
+
+
+def load_app_icon() -> QIcon:
+    icon_path = Path(__file__).resolve().parent / "assets" / "icon.ico"
+    if not icon_path.is_file():
+        return QIcon()
+
+    icon = QIcon(str(icon_path))
+    if icon.isNull():
+        return QIcon()
+    return icon
 
 
 if __name__ == "__main__":
