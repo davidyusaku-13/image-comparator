@@ -4,7 +4,7 @@ import unittest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QPoint, QPointF, Qt
-from PySide6.QtGui import QImage, QMouseEvent, QWheelEvent
+from PySide6.QtGui import QColor, QImage, QMouseEvent, QWheelEvent
 from PySide6.QtWidgets import QApplication
 
 from image_comparator import CompareMode, MainWindow
@@ -20,6 +20,12 @@ def app() -> QApplication:
 def sample_image(width: int = 2000, height: int = 1000) -> QImage:
     image = QImage(width, height, QImage.Format.Format_ARGB32)
     image.fill(0xFFFFFFFF)
+    return image
+
+
+def filled_image(color: str, width: int = 200, height: int = 100) -> QImage:
+    image = QImage(width, height, QImage.Format.Format_ARGB32)
+    image.fill(QColor(color))
     return image
 
 
@@ -44,8 +50,12 @@ class ImageComparatorWindowTests(unittest.TestCase):
     def setUp(self) -> None:
         self.window = MainWindow()
         self.window.resize(1280, 720)
+        self.window.show()
         self.window.canvas.resize(1200, 640)
-        self.window.canvas.set_images(sample_image(), sample_image())
+        self.window.image_a = sample_image()
+        self.window.image_b = sample_image()
+        self.window.canvas.set_images(self.window.image_a, self.window.image_b)
+        self.app.processEvents()
 
     def tearDown(self) -> None:
         self.window.close()
@@ -95,6 +105,42 @@ class ImageComparatorWindowTests(unittest.TestCase):
         self.window.canvas.wheelEvent(event)
 
         self.assertGreater(self.window.canvas._side_zoom, 1.0)
+
+    def test_side_by_side_renders_image_a_when_image_b_missing(self) -> None:
+        self.window.canvas.set_mode(CompareMode.SIDE_BY_SIDE)
+        self.window.canvas.set_images(filled_image("#ff0000"), None)
+
+        rendered = self.window.canvas.grab().toImage()
+
+        self.assertEqual(rendered.pixelColor(300, 320), QColor("#ff0000"))
+        self.assertEqual(rendered.pixelColor(900, 320), QColor("#1f232a"))
+
+    def test_side_by_side_renders_image_b_when_image_a_missing(self) -> None:
+        self.window.canvas.set_mode(CompareMode.SIDE_BY_SIDE)
+        self.window.canvas.set_images(None, filled_image("#00ff00"))
+
+        rendered = self.window.canvas.grab().toImage()
+
+        self.assertEqual(rendered.pixelColor(300, 320), QColor("#1f232a"))
+        self.assertEqual(rendered.pixelColor(900, 320), QColor("#00ff00"))
+
+    def test_slider_renders_left_half_when_only_image_a_loaded(self) -> None:
+        self.window.canvas.set_mode(CompareMode.SLIDER)
+        self.window.canvas.set_images(filled_image("#ff0000"), None)
+
+        rendered = self.window.canvas.grab().toImage()
+
+        self.assertEqual(rendered.pixelColor(300, 320), QColor("#ff0000"))
+        self.assertEqual(rendered.pixelColor(900, 320), QColor("#1f232a"))
+
+    def test_slider_renders_right_half_when_only_image_b_loaded(self) -> None:
+        self.window.canvas.set_mode(CompareMode.SLIDER)
+        self.window.canvas.set_images(None, filled_image("#00ff00"))
+
+        rendered = self.window.canvas.grab().toImage()
+
+        self.assertEqual(rendered.pixelColor(300, 320), QColor("#1f232a"))
+        self.assertEqual(rendered.pixelColor(900, 320), QColor("#00ff00"))
 
     def test_clicking_canvas_clears_spinbox_focus(self) -> None:
         self.window.lens_zoom_input.setFocus()

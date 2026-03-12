@@ -239,15 +239,13 @@ class ImageCompareCanvas(QWidget):
         painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, text)
 
     def _draw_side_by_side(self, painter: QPainter) -> None:
-        if self.image_a is None or self.image_b is None:
-            return
-
         left_pane, right_pane = self._side_panes()
-        src_a, dst_a = self._pane_render_state(self.image_a, left_pane)
-        src_b, dst_b = self._pane_render_state(self.image_b, right_pane)
-
-        painter.drawImage(dst_a, self.image_a, src_a)
-        painter.drawImage(dst_b, self.image_b, src_b)
+        if self.image_a is not None:
+            src_a, dst_a = self._pane_render_state(self.image_a, left_pane)
+            painter.drawImage(dst_a, self.image_a, src_a)
+        if self.image_b is not None:
+            src_b, dst_b = self._pane_render_state(self.image_b, right_pane)
+            painter.drawImage(dst_b, self.image_b, src_b)
 
         pane_pen = QPen(QColor("#7f8ea3"))
         pane_pen.setWidth(1)
@@ -264,7 +262,12 @@ class ImageCompareCanvas(QWidget):
             QPointF(divider_x, left_pane.bottom()),
         )
 
-        if self._hold_zoom_active and self._hold_norm_pos is not None:
+        if (
+            self.image_a is not None
+            and self.image_b is not None
+            and self._hold_zoom_active
+            and self._hold_norm_pos is not None
+        ):
             self._draw_hold_lens(
                 painter, self.image_a, src_a, dst_a, left_pane, self._hold_norm_pos
             )
@@ -388,9 +391,6 @@ class ImageCompareCanvas(QWidget):
             self.releaseMouse()
 
     def _draw_slider(self, painter: QPainter) -> None:
-        if self.image_a is None or self.image_b is None:
-            return
-
         area = self._view_area()
         target = self._slider_target_rect()
         if target.isNull() or area.isNull():
@@ -399,15 +399,23 @@ class ImageCompareCanvas(QWidget):
         painter.save()
         painter.setClipRect(area)
 
-        painter.drawImage(target, self.image_b)
-
         slider_x = self._slider_x(area)
-        clip_rect = QRectF(
+        left_clip_rect = QRectF(
             area.x(), area.y(), max(0.0, slider_x - area.x()), area.height()
         )
-        if clip_rect.width() > 0:
+        right_clip_rect = QRectF(
+            slider_x, area.y(), max(0.0, area.right() - slider_x), area.height()
+        )
+
+        if self.image_b is not None and right_clip_rect.width() > 0:
             painter.save()
-            painter.setClipRect(clip_rect)
+            painter.setClipRect(right_clip_rect)
+            painter.drawImage(target, self.image_b)
+            painter.restore()
+
+        if self.image_a is not None and left_clip_rect.width() > 0:
+            painter.save()
+            painter.setClipRect(left_clip_rect)
             painter.drawImage(target, self.image_a)
             painter.restore()
 
@@ -438,12 +446,6 @@ class ImageCompareCanvas(QWidget):
             self._draw_placeholder(
                 painter, "Load Image A and Image B to start comparison."
             )
-            return
-        if not self.image_a:
-            self._draw_placeholder(painter, "Load Image A.")
-            return
-        if not self.image_b:
-            self._draw_placeholder(painter, "Load Image B.")
             return
 
         if self.mode == CompareMode.SIDE_BY_SIDE:
